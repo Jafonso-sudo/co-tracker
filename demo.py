@@ -66,6 +66,7 @@ if __name__ == "__main__":
     # load the input video frame by frame
     video = read_video_from_path(args.video_path)
     video = torch.from_numpy(video).permute(0, 3, 1, 2)[None].float()
+    # print(video[0][0]) # Values are between 0 and 255
     segm_mask = np.array(Image.open(os.path.join(args.mask_path)))
     segm_mask = torch.from_numpy(segm_mask)[None, None]
 

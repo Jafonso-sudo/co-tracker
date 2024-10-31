@@ -4,21 +4,26 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import os
 import torch
 import torch.nn.functional as F
 
 from cotracker.models.core.model_utils import smart_cat, get_points_on_a_grid
 from cotracker.models.build_cotracker import build_cotracker
 
+FILE_PATH = os.path.dirname(os.path.abspath(__file__))
+
 
 class CoTrackerPredictor(torch.nn.Module):
     def __init__(
         self,
-        checkpoint="./checkpoints/scaled_offline.pth",
+        checkpoint=None,
         offline=True,
         v2=False,
         window_len=60,
     ):
+        if checkpoint is None:
+            checkpoint = os.path.join(FILE_PATH, "..", "checkpoints", "scaled_offline.pth")
         super().__init__()
         self.support_grid_size = 6
         model = build_cotracker(
@@ -211,12 +216,14 @@ class CoTrackerPredictor(torch.nn.Module):
 class CoTrackerOnlinePredictor(torch.nn.Module):
     def __init__(
         self,
-        checkpoint="./checkpoints/scaled_online.pth",
+        checkpoint=None,
         offline=False,
         v2=False,
         window_len=16,
     ):
         super().__init__()
+        if checkpoint is None:
+            checkpoint = os.path.join(FILE_PATH, "..", "checkpoints", "scaled_online.pth")
         self.support_grid_size = 6
         model = build_cotracker(checkpoint, v2=v2, offline=False, window_len=window_len)
         self.interp_shape = model.model_resolution
@@ -298,4 +305,5 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
                 ]
             ),
             visibilities > thr,
+            confidence
         )
