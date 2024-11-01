@@ -276,7 +276,7 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
                 )
             
             self.queries = queries
-            return (None, None)
+            return (None, None, None)
 
         video_chunk = video_chunk.reshape(B * T, C, H, W)
         video_chunk = F.interpolate(
@@ -294,8 +294,8 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
             visibilities = visibilities[:,:,:self.N]
             confidence = confidence[:,:,:self.N]
             
-        visibilities = visibilities * confidence
-        thr = 0.6
+        # visibilities = visibilities * confidence
+        # thr = 0.6
         return (
             tracks
             * tracks.new_tensor(
@@ -304,6 +304,6 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
                     (H - 1) / (self.interp_shape[0] - 1),
                 ]
             ),
-            visibilities > thr,
+            visibilities,
             confidence
         )
