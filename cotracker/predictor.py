@@ -129,6 +129,7 @@ class CoTrackerPredictor(torch.nn.Module):
                     (self.interp_shape[0] - 1) / (H - 1),
                 ]
             )
+            # TODO: Apply the same transformation for the ground truth values we'll pass to the model
         elif grid_size > 0:
             grid_pts = get_points_on_a_grid(
                 grid_size, self.interp_shape, device=video.device

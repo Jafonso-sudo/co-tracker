@@ -261,6 +261,8 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
 
             vis_preds.append(vis[..., 0])
             conf_preds.append(conf[..., 0])
+            # TODO: Here is where we would apply our rigidity prior
+            # TODO: This is where I would readd the initializations we know to be ground truths (not sure if very impactful)
         return coord_preds, vis_preds, conf_preds
 
     def forward(
@@ -334,6 +336,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
 
         queried_coords = queries[..., 1:3]
         queried_coords = queried_coords / self.stride
+        # TODO: Potentially have to add this for ground truths as well
 
         # We store our predictions here
         coords_predicted = torch.zeros((B, T, N, 2), device=device)
@@ -414,6 +417,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
             sample_mask = (sample_frames >= left) & (sample_frames < right)
 
         for i in range(self.corr_levels):
+            # TODO: This could be where the queried frames correlation is computed, could be easy to add intermediates?
             track_feat, track_feat_support = self.get_track_feat(
                 fmaps_pyramid[i],
                 queried_frames - self.online_ind if is_online else queried_frames,
@@ -448,6 +452,9 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
         vis_init = torch.zeros((B, S, N, 1), device=device).float()
         conf_init = torch.zeros((B, S, N, 1), device=device).float()
         coords_init = queried_coords.reshape(B, 1, N, 2).expand(B, S, N, 2).float()
+        # TODO: THIS IS WHERE WE COULD ADD THE INITIALIZATION HELP
+        # - Currently they initialize the coords_init with the queried coords and propagate to entire video
+        # - We can do one better by initializing them in the prepend video, and potentially giving a better initialization later on
 
         num_windows = (T - S + step - 1) // step + 1
         # We process only the current video chunk in the online mode
@@ -456,6 +463,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
         for ind in indices:
             if ind > 0:
                 overlap = S - step
+                # NOTE: Here they create a mask for queried frames that are in the overlap region
                 copy_over = (queried_frames < ind + overlap)[
                     :, None, :, None
                 ]  # B 1 N 1
@@ -470,7 +478,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
                 conf_prev = conf_predicted[:, ind : ind + overlap, :, None].clone()
                 padding_tensor = conf_prev[:, -1:, :, :].expand(-1, step, -1, -1)
                 conf_prev = torch.cat([conf_prev, padding_tensor], dim=1)
-
+                # TODO: Here is the final step where they copy over the previous predictions
                 coords_init = torch.where(
                     copy_over.expand_as(coords_init), coords_prev, coords_init
                 )
