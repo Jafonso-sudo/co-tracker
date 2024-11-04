@@ -159,7 +159,7 @@ class CoTrackerPredictor(torch.nn.Module):
             grid_pts = grid_pts.repeat(B, 1, 1)
             queries = torch.cat([queries, grid_pts], dim=1)
 
-        tracks, visibilities, __, __ = self.model.forward(
+        tracks, visibilities, confidence, __ = self.model.forward(
             video=video, queries=queries, iters=6
         )
 
@@ -172,8 +172,9 @@ class CoTrackerPredictor(torch.nn.Module):
         if add_support_grid:
             tracks = tracks[:, :, : -self.support_grid_size**2]
             visibilities = visibilities[:, :, : -self.support_grid_size**2]
-        thr = 0.9
-        visibilities = visibilities > thr
+            confidence = confidence[:, :, : -self.support_grid_size**2]
+        # thr = 0.9
+        # visibilities = visibilities > thr
 
         # correct query-point predictions
         # see https://github.com/facebookresearch/co-tracker/issues/28
@@ -188,11 +189,14 @@ class CoTrackerPredictor(torch.nn.Module):
 
             # correct visibilities, the query points should be visible
             visibilities[i, queries_t, arange] = True
+            
+            # correct confidence, the query points should have confidence 1
+            confidence[i, queries_t, arange] = 1
 
         tracks *= tracks.new_tensor(
             [(W - 1) / (self.interp_shape[1] - 1), (H - 1) / (self.interp_shape[0] - 1)]
         )
-        return tracks, visibilities
+        return tracks, visibilities, confidence
 
     def _compute_backward_tracks(self, video, queries, tracks, visibilities):
         inv_video = video.flip(1).clone()
@@ -224,11 +228,12 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
     ):
         super().__init__()
         if checkpoint is None:
-            checkpoint = os.path.join(FILE_PATH, "..", "checkpoints", "scaled_online.pth")
+            checkpoint = os.path.join(FILE_PATH, "..", "checkpoints", "scaled_online.pth" if not offline else "scaled_offline.pth")
         self.support_grid_size = 6
-        model = build_cotracker(checkpoint, v2=v2, offline=False, window_len=window_len)
+        model = build_cotracker(checkpoint, v2=v2, offline=offline, window_len=window_len)
         self.interp_shape = model.model_resolution
         self.step = model.window_len // 2
+        self.offline = offline
         self.model = model
         self.model.eval()
 
@@ -246,7 +251,8 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
         # Initialize online video processing and save queried points
         # This needs to be done before processing *each new video*
         if is_first_step:
-            self.model.init_video_online_processing()
+            if not self.offline:
+                self.model.init_video_online_processing()
             if queries is not None:
                 B, N, D = queries.shape
                 self.N = N
@@ -277,7 +283,8 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
                 )
             
             self.queries = queries
-            return (None, None, None)
+            if not self.offline:
+                return (None, None, None)
 
         video_chunk = video_chunk.reshape(B * T, C, H, W)
         video_chunk = F.interpolate(
@@ -288,7 +295,7 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
         )
 
         tracks, visibilities, confidence, __ = self.model(
-            video=video_chunk, queries=self.queries, iters=6, is_online=True
+            video=video_chunk, queries=self.queries, iters=6, **({"is_online":True} if not self.offline else {})
         )
         if add_support_grid:
             tracks = tracks[:,:,:self.N]
