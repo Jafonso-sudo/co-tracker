@@ -5,7 +5,6 @@
 # LICENSE file in the root directory of this source tree.
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from cotracker.models.core.cotracker.cotracker3_online import CoTrackerThreeBase, posenc
 
@@ -24,6 +23,9 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
         is_train=False,
         add_space_attn=True,
         fmaps_chunk_size=200,
+        init_coords=None,
+        init_vis=None,
+        init_confidence=None,
     ):
         """Predict tracks
 
@@ -32,6 +34,11 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
             queries (FloatTensor[B, N, 3]): point queries.
             iters (int, optional): number of updates. Defaults to 4.
             is_train (bool, optional): enables training mode. Defaults to False.
+            add_space_attn (bool, optional): enables spatial attention. Defaults to True.
+            fmaps_chunk_size (int, optional): chunk size for feature maps. Defaults to 200.
+            init_coords (FloatTensor[B, T, N, 2], optional): initial coordinates. Defaults to None.
+            init_vis (FloatTensor[B, T, N], optional): initial visibility. Defaults to None.
+            init_confidence (FloatTensor[B, T, N], optional): initial confidence. Defaults to None.
         Returns:
             - coords_predicted (FloatTensor[B, T, N, 2]):
             - vis_predicted (FloatTensor[B, T, N]):
@@ -65,19 +72,13 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
         dtype = video.dtype
         queried_frames = queries[:, :, 0].long()
 
+        # TODO: Remember to apply the same transformation to the initial coordinates
         queried_coords = queries[..., 1:3]
         queried_coords = queried_coords / self.stride
 
-        # We store our predictions here
-        all_coords_predictions, all_vis_predictions, all_confidence_predictions = (
-            [],
-            [],
-            [],
-        )
         C_ = C
-        H4, W4 = H // self.stride, W // self.stride
-        # Compute convolutional features for the video or for the current chunk in case of online mode
 
+        # Compute convolutional features for the video or for the current chunk in case of online mode
         if T > fmaps_chunk_size:
             fmaps = []
             for t in range(0, T, fmaps_chunk_size):
@@ -103,7 +104,6 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
 
         # We compute track features
         fmaps_pyramid = []
-        track_feat_pyramid = []
         track_feat_support_pyramid = []
         fmaps_pyramid.append(fmaps)
         for i in range(self.corr_levels - 1):
@@ -117,30 +117,28 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
             fmaps_pyramid.append(fmaps)
 
         for i in range(self.corr_levels):
-            track_feat, track_feat_support = self.get_track_feat(
+            # TODO: This is where we would potentially add non-query frames w/ GT to do correlation I think?
+            _, track_feat_support = self.get_track_feat(
                 fmaps_pyramid[i],
                 queried_frames,
                 queried_coords / 2**i,
                 support_radius=self.corr_radius,
             )
-            track_feat_pyramid.append(track_feat.repeat(1, T, 1, 1))
             track_feat_support_pyramid.append(track_feat_support.unsqueeze(1))
 
         D_coords = 2
 
-        coord_preds, vis_preds, confidence_preds = [], [], []
-
+        # TODO: This is where we introduce a better initialization for the coordinates, visibility, confidence
         vis = torch.zeros((B, T, N), device=device).float()
         confidence = torch.zeros((B, T, N), device=device).float()
         coords = queried_coords.reshape(B, 1, N, 2).expand(B, T, N, 2).float()
 
         r = 2 * self.corr_radius + 1
 
-        for it in range(iters):
+        for _ in range(iters):
             coords = coords.detach()  # B T N 2
             coords_init = coords.view(B * T, N, 2)
             corr_embs = []
-            corr_feats = []
             for i in range(self.corr_levels):
                 corr_feat = self.get_correlation_feat(
                     fmaps_pyramid[i], coords_init / 2**i
@@ -207,27 +205,9 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
 
             vis = vis + delta_vis
             confidence = confidence + delta_confidence
+            
 
             coords = coords + delta_coords
-            coords_append = coords.clone()
-            coords_append[..., :2] = coords_append[..., :2] * float(self.stride)
-            coord_preds.append(coords_append)
-            vis_preds.append(torch.sigmoid(vis))
-            confidence_preds.append(torch.sigmoid(confidence))
+            # TODO: Here is where we would introduce the rigidity prior
 
-        if is_train:
-            all_coords_predictions.append([coord[..., :2] for coord in coord_preds])
-            all_vis_predictions.append(vis_preds)
-            all_confidence_predictions.append(confidence_preds)
-
-        if is_train:
-            train_data = (
-                all_coords_predictions,
-                all_vis_predictions,
-                all_confidence_predictions,
-                torch.ones_like(vis_preds[-1], device=vis_preds[-1].device),
-            )
-        else:
-            train_data = None
-
-        return coord_preds[-1][..., :2], vis_preds[-1], confidence_preds[-1], train_data
+        return coords[..., :2] * float(self.stride), torch.sigmoid(vis), torch.sigmoid(confidence), None

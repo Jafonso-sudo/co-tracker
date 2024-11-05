@@ -23,7 +23,9 @@ class CoTrackerPredictor(torch.nn.Module):
         window_len=60,
     ):
         if checkpoint is None:
-            checkpoint = os.path.join(FILE_PATH, "..", "checkpoints", "scaled_offline.pth")
+            checkpoint = os.path.join(
+                FILE_PATH, "..", "checkpoints", "scaled_offline.pth"
+            )
         super().__init__()
         self.support_grid_size = 6
         model = build_cotracker(
@@ -168,11 +170,11 @@ class CoTrackerPredictor(torch.nn.Module):
                 video, queries, tracks, visibilities
             )
             if add_support_grid:
-                queries[:, -self.support_grid_size**2 :, 0] = T - 1
+                queries[:, -(self.support_grid_size**2) :, 0] = T - 1
         if add_support_grid:
-            tracks = tracks[:, :, : -self.support_grid_size**2]
-            visibilities = visibilities[:, :, : -self.support_grid_size**2]
-            confidence = confidence[:, :, : -self.support_grid_size**2]
+            tracks = tracks[:, :, : -(self.support_grid_size**2)]
+            visibilities = visibilities[:, :, : -(self.support_grid_size**2)]
+            confidence = confidence[:, :, : -(self.support_grid_size**2)]
         # thr = 0.9
         # visibilities = visibilities > thr
 
@@ -189,7 +191,7 @@ class CoTrackerPredictor(torch.nn.Module):
 
             # correct visibilities, the query points should be visible
             visibilities[i, queries_t, arange] = True
-            
+
             # correct confidence, the query points should have confidence 1
             confidence[i, queries_t, arange] = 1
 
@@ -228,9 +230,16 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
     ):
         super().__init__()
         if checkpoint is None:
-            checkpoint = os.path.join(FILE_PATH, "..", "checkpoints", "scaled_online.pth" if not offline else "scaled_offline.pth")
+            checkpoint = os.path.join(
+                FILE_PATH,
+                "..",
+                "checkpoints",
+                "scaled_online.pth" if not offline else "scaled_offline.pth",
+            )
         self.support_grid_size = 6
-        model = build_cotracker(checkpoint, v2=v2, offline=offline, window_len=window_len)
+        model = build_cotracker(
+            checkpoint, v2=v2, offline=offline, window_len=window_len
+        )
         self.interp_shape = model.model_resolution
         self.step = model.window_len // 2
         self.offline = offline
@@ -246,6 +255,9 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
         grid_size: int = 5,
         grid_query_frame: int = 0,
         add_support_grid=False,
+        init_coords=None,
+        init_vis=None,
+        init_confidence=None,
     ):
         B, T, C, H, W = video_chunk.shape
         # Initialize online video processing and save queried points
@@ -264,9 +276,19 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
                         (self.interp_shape[0] - 1) / (H - 1),
                     ]
                 )
+                if init_coords:
+                    init_coords = init_coords.clone()
+                    init_coords[:, :, 1:] *= init_coords.new_tensor(
+                        [
+                            (self.interp_shape[1] - 1) / (W - 1),
+                            (self.interp_shape[0] - 1) / (H - 1),
+                        ]
+                    )
                 if add_support_grid:
                     grid_pts = get_points_on_a_grid(
-                        self.support_grid_size, self.interp_shape, device=video_chunk.device
+                        self.support_grid_size,
+                        self.interp_shape,
+                        device=video_chunk.device,
                     )
                     grid_pts = torch.cat(
                         [torch.zeros_like(grid_pts[:, :, :1]), grid_pts], dim=2
@@ -281,7 +303,7 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
                     [torch.ones_like(grid_pts[:, :, :1]) * grid_query_frame, grid_pts],
                     dim=2,
                 )
-            
+
             self.queries = queries
             if not self.offline:
                 return (None, None, None)
@@ -295,13 +317,19 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
         )
 
         tracks, visibilities, confidence, __ = self.model(
-            video=video_chunk, queries=self.queries, iters=6, **({"is_online":True} if not self.offline else {})
+            video=video_chunk,
+            queries=self.queries,
+            iters=6,
+            **({"is_online": True} if not self.offline else {}),
+            init_coords=init_coords,
+            init_vis=init_vis,
+            init_confidence=init_confidence,
         )
         if add_support_grid:
-            tracks = tracks[:,:,:self.N]
-            visibilities = visibilities[:,:,:self.N]
-            confidence = confidence[:,:,:self.N]
-            
+            tracks = tracks[:, :, : self.N]
+            visibilities = visibilities[:, :, : self.N]
+            confidence = confidence[:, :, : self.N]
+
         # visibilities = visibilities * confidence
         # thr = 0.6
         return (
@@ -313,5 +341,5 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
                 ]
             ),
             visibilities,
-            confidence
+            confidence,
         )
