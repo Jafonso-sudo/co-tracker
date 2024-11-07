@@ -72,9 +72,11 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
         dtype = video.dtype
         queried_frames = queries[:, :, 0].long()
 
-        # TODO: Remember to apply the same transformation to the initial coordinates
+        # Apply stride transformation on the queries and the initial coordinates
         queried_coords = queries[..., 1:3]
         queried_coords = queried_coords / self.stride
+        if init_coords is not None:
+            init_coords = init_coords / self.stride
 
         C_ = C
 
@@ -128,10 +130,19 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
 
         D_coords = 2
 
-        # TODO: This is where we introduce a better initialization for the coordinates, visibility, confidence
-        vis = torch.zeros((B, T, N), device=device).float()
-        confidence = torch.zeros((B, T, N), device=device).float()
-        coords = queried_coords.reshape(B, 1, N, 2).expand(B, T, N, 2).float()
+        # This is where we introduce a better initialization for the coordinates, visibility, confidence if available
+        if init_vis is not None:
+            vis = init_vis
+        else:
+            vis = torch.zeros((B, T, N), device=device).float()
+        if init_confidence is not None:
+            confidence = init_confidence
+        else:    
+            confidence = torch.zeros((B, T, N), device=device).float()
+        if init_coords is not None:
+            coords = init_coords
+        else:
+            coords = queried_coords.reshape(B, 1, N, 2).expand(B, T, N, 2).float()
 
         r = 2 * self.corr_radius + 1
 
@@ -203,10 +214,9 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
             delta_vis = delta[..., D_coords].permute(0, 2, 1)
             delta_confidence = delta[..., D_coords + 1].permute(0, 2, 1)
 
+            # TODO: Only update the non-query frames
             vis = vis + delta_vis
             confidence = confidence + delta_confidence
-            
-
             coords = coords + delta_coords
             # TODO: Here is where we would introduce the rigidity prior
 

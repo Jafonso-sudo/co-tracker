@@ -276,7 +276,7 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
                         (self.interp_shape[0] - 1) / (H - 1),
                     ]
                 )
-                if init_coords:
+                if init_coords is not None:
                     init_coords = init_coords.clone()
                     init_coords[:, :, 1:] *= init_coords.new_tensor(
                         [

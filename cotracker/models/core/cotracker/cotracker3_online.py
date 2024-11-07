@@ -274,6 +274,9 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
         add_space_attn=True,
         fmaps_chunk_size=200,
         is_online=False,
+        init_coords=None,
+        init_vis=None,
+        init_confidence=None,
     ):
         """Predict tracks
 
