@@ -258,6 +258,7 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
         init_coords=None,
         init_vis=None,
         init_confidence=None,
+        init_length=None,
     ):
         B, T, C, H, W = video_chunk.shape
         # Initialize online video processing and save queried points
@@ -324,6 +325,7 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
             init_coords=init_coords,
             init_vis=init_vis,
             init_confidence=init_confidence,
+            init_length=init_length,
         )
         if add_support_grid:
             tracks = tracks[:, :, : self.N]

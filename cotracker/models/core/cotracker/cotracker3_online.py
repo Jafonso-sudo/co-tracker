@@ -110,17 +110,25 @@ class CoTrackerThreeBase(nn.Module):
         else:
             return coords_lvl
 
+    #                   # B T C H/4 W/4 | B x N (frame) | B x N x 2 (x, y)
     def get_track_feat(self, fmaps, queried_frames, queried_coords, support_radius=0):
-
+        # B 1 N 1 (frame)
         sample_frames = queried_frames[:, None, :, None]
+        # B 1 N 3 (frame, x, y)
         sample_coords = torch.cat(
             [
                 sample_frames,
-                queried_coords[:, None],
+                queried_coords[:, None],  # B 1 N 2
             ],
             dim=-1,
         )
+        # For each point, get square of size 2r+1 around it B (2r + 1)^2 N 3, where (2r + 1)^2 is 49
+        # TODO: Maybe this is where we would introduce the multi-frame for same point
+        # right now we are already doing it somehow for (2r + 1)^2 points in the same frame, but we should do
+        # it for (2r + 1)^2 x # of different frames where the point is queried
+        # B (2r + 1)^2 N 3
         support_points = self.get_support_points(sample_coords, support_radius)
+        # B (2r + 1)^2 N C
         support_track_feats = sample_features5d(fmaps, support_points)
         return (
             support_track_feats[:, None, support_track_feats.shape[1] // 2],
@@ -170,12 +178,12 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
 
     def forward_window(
         self,
-        fmaps_pyramid,
-        coords,
-        track_feat_support_pyramid,
-        vis=None,
-        conf=None,
-        attention_mask=None,
+        fmaps_pyramid,  # 4 scales x B T C H/4 W/4
+        coords,  # B T N 2
+        track_feat_support_pyramid,  # 4 scales x B 1 (2r + 1)^2 N C
+        vis=None,  # B T N 1
+        conf=None,  # B T N 1
+        attention_mask=None,  # B T N (Has query for point i appeared in fram j?)
         iters=4,
         add_space_attn=False,
     ):
@@ -190,24 +198,28 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
             corr_embs = []
             corr_feats = []
             for i in range(self.corr_levels):
-                corr_feat = self.get_correlation_feat(
+                corr_feat = self.get_correlation_feat(  # B T N (2r + 1) (2r + 1) C
                     fmaps_pyramid[i], coords_init / 2**i
                 )
-                track_feat_support = (
+                track_feat_support = (  # B N (2r + 1) (2r + 1) C
                     track_feat_support_pyramid[i]
                     .view(B, 1, r, r, N, self.latent_dim)
                     .squeeze(1)
                     .permute(0, 3, 1, 2, 4)
                 )
-                corr_volume = torch.einsum(
+                corr_volume = torch.einsum(  # B T N (2r + 1) (2r + 1) (2r + 1) (2r + 1)
                     "btnhwc,bnijc->btnhwij", corr_feat, track_feat_support
                 )
-                corr_emb = self.corr_mlp(corr_volume.reshape(B * S * N, r * r * r * r))
-
+                corr_emb = self.corr_mlp(
+                    corr_volume.reshape(B * S * N, r * r * r * r)
+                )  # Num Batches: B * T * N, Input Size: 49 * 49, Output Size: 256
+                # B * T * N, 256
                 corr_embs.append(corr_emb)
 
             corr_embs = torch.cat(corr_embs, dim=-1)
-            corr_embs = corr_embs.view(B, S, N, corr_embs.shape[-1])
+            corr_embs = corr_embs.view(
+                B, S, N, corr_embs.shape[-1]
+            )  # B T N 256 * 4 TODO: We would treat alternates the exact same so far until this point
 
             transformer_input = [vis, conf, corr_embs]
 
@@ -235,7 +247,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
                 torch.cat([rel_coords_forward, rel_coords_backward], dim=-1),
                 min_deg=0,
                 max_deg=10,
-            )  # batch, num_points, num_frames, 84
+            )  # B T N 84
             transformer_input.append(rel_pos_emb_input)
 
             x = (
@@ -257,12 +269,13 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
             conf = conf + delta_conf
 
             coords = coords + delta_coords
+            # TODO: Here is where we would apply our rigidity prior
+            
+            
             coord_preds.append(coords[..., :2] * float(self.stride))
 
             vis_preds.append(vis[..., 0])
             conf_preds.append(conf[..., 0])
-            # TODO: Here is where we would apply our rigidity prior
-            # TODO: This is where I would readd the initializations we know to be ground truths (not sure if very impactful)
         return coord_preds, vis_preds, conf_preds
 
     def forward(
@@ -277,6 +290,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
         init_coords=None,
         init_vis=None,
         init_confidence=None,
+        init_length=None,
     ):
         """Predict tracks
 
@@ -335,13 +349,16 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
         # The first channel is the frame number
         # The rest are the coordinates of points we want to track
         dtype = video.dtype
+        # For each query point, which frame it is queried in
         queried_frames = queries[:, :, 0].long()
-
+        # For each query point, where it is queried from (location)
         queried_coords = queries[..., 1:3]
         queried_coords = queried_coords / self.stride
-        # TODO: Potentially have to add this for ground truths as well
+        # Apply stride to ground truths as well
+        if init_coords is not None:
+            init_coords_strided = init_coords / self.stride
 
-        # We store our predictions here
+        # We store our predictions here (In online T = S = window size)
         coords_predicted = torch.zeros((B, T, N, 2), device=device)
         vis_predicted = torch.zeros((B, T, N), device=device)
         conf_predicted = torch.zeros((B, T, N), device=device)
@@ -365,7 +382,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
                     self.online_conf_predicted, (0, 0, 0, pad), "constant"
                 )
 
-        # We store our predictions here
+        # We store our predictions here (For training)
         all_coords_predictions, all_vis_predictions, all_confidence_predictions = (
             [],
             [],
@@ -385,7 +402,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
                 C_chunk, H_chunk, W_chunk = fmaps_chunk.shape[1:]
                 fmaps.append(fmaps_chunk.reshape(B, T_chunk, C_chunk, H_chunk, W_chunk))
             fmaps = torch.cat(fmaps, dim=1).reshape(-1, C_chunk, H_chunk, W_chunk)
-        else:
+        else:  # Compute all features at once (Online model or small video)
             fmaps = self.fnet(video.reshape(-1, C_, H, W))
         fmaps = fmaps.permute(0, 2, 3, 1)
         fmaps = fmaps / torch.sqrt(
@@ -413,14 +430,17 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
                 B, T_pad, self.latent_dim, fmaps_.shape[-2], fmaps_.shape[-1]
             )
             fmaps_pyramid.append(fmaps)
+        # Check which query frames are in the current window (left, left + S) i.e. (left, left + 16)
         if is_online:
             sample_frames = queried_frames[:, None, :, None]  # B 1 N 1
             left = 0 if self.online_ind == 0 else self.online_ind + step
             right = self.online_ind + S
+            # B 1 N 1 (True/False) - True if the frame is in the current window
             sample_mask = (sample_frames >= left) & (sample_frames < right)
 
         for i in range(self.corr_levels):
             # TODO: This could be where the queried frames correlation is computed, could be easy to add intermediates?
+            # B 1 N C, B (2r + 1)^2 N C - features from point, features from support neighbour points
             track_feat, track_feat_support = self.get_track_feat(
                 fmaps_pyramid[i],
                 queried_frames - self.online_ind if is_online else queried_frames,
@@ -492,22 +512,25 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
                     copy_over.expand_as(conf_init), conf_prev, conf_init
                 )
 
-            attention_mask = (queried_frames < ind + S).reshape(B, 1, N)  # B S N
+            attention_mask = (queried_frames < ind + S).reshape(
+                B, 1, N
+            )  # B 1 N (Which points are queried in the current window or before)
             # import ipdb; ipdb.set_trace()
             coords, viss, confs = self.forward_window(
                 fmaps_pyramid=(
-                    fmaps_pyramid
+                    fmaps_pyramid  # 4 scales x B T C H/4 W/4
                     if is_online
                     else [fmap[:, ind : ind + S] for fmap in fmaps_pyramid]
                 ),
                 coords=coords_init,
                 track_feat_support_pyramid=[
-                    attention_mask[:, None, :, :, None] * tfeat
+                    attention_mask[:, None, :, :, None]
+                    * tfeat  # B 1 (2r + 1)^2 N C (Only the points from queries that have already appeared)
                     for tfeat in track_feat_support_pyramid
                 ],
                 vis=vis_init,
                 conf=conf_init,
-                attention_mask=attention_mask.repeat(1, S, 1),
+                attention_mask=attention_mask.repeat(1, S, 1),  # B S N
                 iters=iters,
                 add_space_attn=add_space_attn,
             )
@@ -517,6 +540,17 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
             coords_predicted[:, ind : ind + S] = coords[-1][:, :S_trimmed]
             vis_predicted[:, ind : ind + S] = viss[-1][:, :S_trimmed]
             conf_predicted[:, ind : ind + S] = confs[-1][:, :S_trimmed]
+            if (
+                init_confidence is not None
+                and init_vis is not None
+                and init_coords is not None
+                and init_length is not None
+                and ind < init_length
+            ):
+                left, right = ind, min(ind + S, init_length)
+                conf_predicted[:, left:right] = init_confidence[:, left:right]
+                vis_predicted[:, left:right] = init_vis[:, left:right]
+                coords_predicted[:, left:right] = init_coords[:, left:right]
             if is_train:
                 all_coords_predictions.append(
                     [coord[:, :S_trimmed] for coord in coords]
