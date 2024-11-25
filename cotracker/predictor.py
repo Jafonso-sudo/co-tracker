@@ -5,11 +5,14 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
+from typing import Optional
 import torch
 import torch.nn.functional as F
 
 from cotracker.models.core.model_utils import smart_cat, get_points_on_a_grid
 from cotracker.models.build_cotracker import build_cotracker
+
+from posingpixels.query_refiner import QueryRefiner
 
 FILE_PATH = os.path.dirname(os.path.abspath(__file__))
 
@@ -259,6 +262,7 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
         init_vis=None,
         init_confidence=None,
         init_length=None,
+        query_refiner: Optional[QueryRefiner]=None,
     ):
         B, T, C, H, W = video_chunk.shape
         # Initialize online video processing and save queried points
@@ -326,6 +330,7 @@ class CoTrackerOnlinePredictor(torch.nn.Module):
             init_vis=init_vis,
             init_confidence=init_confidence,
             init_length=init_length,
+            query_refiner=query_refiner,
         )
         if add_support_grid:
             tracks = tracks[:, :, : self.N]

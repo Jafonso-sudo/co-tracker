@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,6 +13,8 @@ from cotracker.models.core.embeddings import get_1d_sincos_pos_embed_from_grid
 
 from cotracker.models.core.cotracker.blocks import Mlp, BasicEncoder
 from cotracker.models.core.cotracker.cotracker import EfficientUpdateFormer
+
+from posingpixels.query_refiner import QueryRefiner
 
 torch.manual_seed(0)
 
@@ -186,6 +189,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
         attention_mask=None,  # B T N (Has query for point i appeared in fram j?)
         iters=4,
         add_space_attn=False,
+        query_refiner: Optional[QueryRefiner] = None,
     ):
         B, S, *_ = fmaps_pyramid[0].shape
         N = coords.shape[2]
@@ -270,6 +274,10 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
 
             coords = coords + delta_coords
             # TODO: Here is where we would apply our rigidity prior
+            # TODO: Add light support for batches (just do a for loop)
+            if query_refiner is not None and it == 5:
+                coords[0], vis[0, ..., 0], conf[0, ..., 0], _ = query_refiner(coords[0] * float(self.stride), vis[0, ..., 0], conf[0, ..., 0])
+                coords = coords / float(self.stride)
             
             
             coord_preds.append(coords[..., :2] * float(self.stride))
@@ -291,6 +299,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
         init_vis=None,
         init_confidence=None,
         init_length=None,
+        query_refiner: Optional[QueryRefiner] = None,
     ):
         """Predict tracks
 
@@ -533,6 +542,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
                 attention_mask=attention_mask.repeat(1, S, 1),  # B S N
                 iters=iters,
                 add_space_attn=add_space_attn,
+                query_refiner=query_refiner,
             )
             S_trimmed = (
                 T if is_online else min(T - ind, S)
