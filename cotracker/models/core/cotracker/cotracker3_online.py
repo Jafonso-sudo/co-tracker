@@ -550,17 +550,34 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
             coords_predicted[:, ind : ind + S] = coords[-1][:, :S_trimmed]
             vis_predicted[:, ind : ind + S] = viss[-1][:, :S_trimmed]
             conf_predicted[:, ind : ind + S] = confs[-1][:, :S_trimmed]
+            # if (
+            #     init_confidence is not None
+            #     and init_vis is not None
+            #     and init_coords is not None
+            #     and init_length is not None
+            #     and ind < init_length
+            # ):
+            #     left, right = ind, min(ind + S, init_length)
+            #     conf_predicted[:, left:right] = init_confidence[:, left:right]
+            #     vis_predicted[:, left:right] = init_vis[:, left:right]
+            #     coords_predicted[:, left:right] = init_coords[:, left:right]
             if (
                 init_confidence is not None
                 and init_vis is not None
                 and init_coords is not None
                 and init_length is not None
-                and ind < init_length
             ):
-                left, right = ind, min(ind + S, init_length)
-                conf_predicted[:, left:right] = init_confidence[:, left:right]
-                vis_predicted[:, left:right] = init_vis[:, left:right]
-                coords_predicted[:, left:right] = init_coords[:, left:right]
+                if ind < init_length:
+                    left, right = ind, min(ind + S, init_length)
+                    conf_predicted[:, left:right] = init_confidence[:, left:right]
+                    vis_predicted[:, left:right] = init_vis[:, left:right]
+                    coords_predicted[:, left:right] = init_coords[:, left:right]
+                if ind < init_coords.shape[1]:
+                    left = max(ind, init_length)
+                    right = min(ind + S, init_coords.shape[1])
+                    conf_predicted[:, left:right] = init_confidence[:, left:right]
+                    vis_predicted[:, left:right] = init_vis[:, left:right]
+                    coords_predicted[:, left:right] = init_coords[:, left:right]
             if is_train:
                 all_coords_predictions.append(
                     [coord[:, :S_trimmed] for coord in coords]
