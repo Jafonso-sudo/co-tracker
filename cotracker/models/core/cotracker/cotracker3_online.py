@@ -365,7 +365,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
         queried_coords = queried_coords / self.stride
         # Apply stride to ground truths as well
         if init_coords is not None:
-            init_coords_strided = init_coords / self.stride
+            init_coords_strided = (init_coords / self.stride)
 
         # We store our predictions here (In online T = S = window size)
         coords_predicted = torch.zeros((B, T, N, 2), device=device)
@@ -483,7 +483,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
 
         vis_init = torch.zeros((B, S, N, 1), device=device).float()
         conf_init = torch.zeros((B, S, N, 1), device=device).float()
-        coords_init = queried_coords.reshape(B, 1, N, 2).expand(B, S, N, 2).float()
+        coords_init = queried_coords.reshape(B, 1, N, 2).expand(B, S, N, 2).float().clone()
         # TODO: THIS IS WHERE WE COULD ADD THE INITIALIZATION HELP
         # - Currently they initialize the coords_init with the queried coords and propagate to entire video
         # - We can do one better by initializing them in the prepend video, and potentially giving a better initialization later on
@@ -520,6 +520,22 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
                 conf_init = torch.where(
                     copy_over.expand_as(conf_init), conf_prev, conf_init
                 )
+                
+            if (
+                init_confidence is not None
+                and init_vis is not None
+                and init_coords is not None
+                and init_length is not None
+                and ind < init_coords.shape[1]
+            ):
+                # If we have initialization data, we copy it over to the current window
+                left, right = ind, min(ind + S, init_coords_strided.shape[1])
+                vis_init[:, : right - left, :, 0] = init_vis[:, left:right]
+                # vis_init[:, right - left :, :, 0] = init_vis[:, right - 1 : right]
+                conf_init[:, : right - left, :, 0] = init_confidence[:, left:right]
+                # conf_init[:, right - left :, :, 0] = init_confidence[:, right - 1 : right]
+                coords_init[:, : right - left] = init_coords_strided[:, left:right]
+                # coords_init[:, right - left :] = init_coords_strided[:, right - 1 : right]
 
             attention_mask = (queried_frames < ind + S).reshape(
                 B, 1, N
@@ -550,34 +566,18 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
             coords_predicted[:, ind : ind + S] = coords[-1][:, :S_trimmed]
             vis_predicted[:, ind : ind + S] = viss[-1][:, :S_trimmed]
             conf_predicted[:, ind : ind + S] = confs[-1][:, :S_trimmed]
-            # if (
-            #     init_confidence is not None
-            #     and init_vis is not None
-            #     and init_coords is not None
-            #     and init_length is not None
-            #     and ind < init_length
-            # ):
-            #     left, right = ind, min(ind + S, init_length)
-            #     conf_predicted[:, left:right] = init_confidence[:, left:right]
-            #     vis_predicted[:, left:right] = init_vis[:, left:right]
-            #     coords_predicted[:, left:right] = init_coords[:, left:right]
             if (
                 init_confidence is not None
                 and init_vis is not None
                 and init_coords is not None
                 and init_length is not None
+                and ind < init_length
             ):
-                if ind < init_length:
-                    left, right = ind, min(ind + S, init_length)
-                    conf_predicted[:, left:right] = init_confidence[:, left:right]
-                    vis_predicted[:, left:right] = init_vis[:, left:right]
-                    coords_predicted[:, left:right] = init_coords[:, left:right]
-                if ind < init_coords.shape[1]:
-                    left = max(ind, init_length)
-                    right = min(ind + S, init_coords.shape[1])
-                    conf_predicted[:, left:right] = init_confidence[:, left:right]
-                    vis_predicted[:, left:right] = init_vis[:, left:right]
-                    coords_predicted[:, left:right] = init_coords[:, left:right]
+                left, right = ind, min(ind + S, init_length)
+                conf_predicted[:, left:right] = init_confidence[:, left:right]
+                vis_predicted[:, left:right] = init_vis[:, left:right]
+                coords_predicted[:, left:right] = init_coords[:, left:right]
+
             if is_train:
                 all_coords_predictions.append(
                     [coord[:, :S_trimmed] for coord in coords]
