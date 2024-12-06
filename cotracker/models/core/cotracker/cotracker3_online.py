@@ -262,7 +262,7 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
 
             x = x + self.interpolate_time_embed(x, S)
             x = x.view(B, N, S, -1)  # (B N) T D -> B N T D
-
+            # TODO: THis is where the NaN is coming from when I use the "force_coords"
             delta = self.updateformer(x, add_space_attn=add_space_attn)
 
             delta_coords = delta[..., :2].permute(0, 2, 1, 3)
@@ -526,16 +526,17 @@ class CoTrackerThreeOnline(CoTrackerThreeBase):
                 and init_vis is not None
                 and init_coords is not None
                 and init_length is not None
-                and ind < init_coords.shape[1]
+                and ind + S < init_coords.shape[1]
+                and ind < init_length + S
             ):
                 # If we have initialization data, we copy it over to the current window
                 left, right = ind, min(ind + S, init_coords_strided.shape[1])
                 vis_init[:, : right - left, :, 0] = init_vis[:, left:right]
-                # vis_init[:, right - left :, :, 0] = init_vis[:, right - 1 : right]
+                vis_init[:, right - left :, :, 0] = init_vis[:, right - 1 : right]
                 conf_init[:, : right - left, :, 0] = init_confidence[:, left:right]
-                # conf_init[:, right - left :, :, 0] = init_confidence[:, right - 1 : right]
+                conf_init[:, right - left :, :, 0] = init_confidence[:, right - 1 : right]
                 coords_init[:, : right - left] = init_coords_strided[:, left:right]
-                # coords_init[:, right - left :] = init_coords_strided[:, right - 1 : right]
+                coords_init[:, right - left :] = init_coords_strided[:, right - 1 : right]
 
             attention_mask = (queried_frames < ind + S).reshape(
                 B, 1, N
